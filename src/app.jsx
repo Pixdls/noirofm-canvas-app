@@ -1,4 +1,3 @@
-export default function WaveSpeedStudio() {
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Upload, X, Play, Pause, Settings, Image as ImageIcon, 
