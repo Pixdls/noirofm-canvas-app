@@ -1,4 +1,4 @@
-import WaveSpeedStudio from "./app.js";
+import WaveSpeedStudio from "./app.jsx";
 
 export default function App() {
   return <WaveSpeedStudio />;
