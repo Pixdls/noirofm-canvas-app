@@ -8,7 +8,7 @@ import {
   Video, Film, Clapperboard, Camera, Wand2, MonitorPlay,
   DollarSign, Timer, BarChart3, Sparkles, RotateCcw, History, ArrowRight,
   Lightbulb, Copy, Save, Shuffle, Sliders, PlayCircle, Users, UserPlus, Check, AlertTriangle, ArrowRightCircle,
-  HelpCircle, Eye, EyeOff, MoreHorizontal, FileDigit
+  HelpCircle, Eye, EyeOff, MoreHorizontal, FileDigit, Music
 } from 'lucide-react';
 
 /**
@@ -75,6 +75,26 @@ const MODEL_REGISTRY = {
     uiDefaults: { duration: 5, guidanceScale: 0.5, outputCount: 1, enableSync: false, enhancePrompt: true }
   },
 
+  "kling-2.6-motion": {
+    key: "kling-2.6-motion",
+    displayName: "Kling 2.6 Pro Motion",
+    endpoint: "https://api.wavespeed.ai/api/v3/kwaivgi/kling-v2.6-pro/motion-control",
+    type: "motion_control",
+    supports: {
+      imagesRequired: true,
+      videosRequired: true,
+      maxImages: 1,
+      maxVideos: 1,
+      outputsMax: 1,
+      resolutions: [],
+      aspectRatios: [], // Controlled by characterOrientation
+      durations: [5, 10, 15, 30],
+      syncMode: false,
+      outputType: "video"
+    },
+    uiDefaults: { characterOrientation: "image", keepOriginalSound: true, negativePrompt: "" }
+  },
+
   "seedance-v1.5-pro": {
     key: "seedance-v1.5-pro",
     displayName: "Seedance 1.5 Pro Fast",
@@ -99,7 +119,8 @@ const ESTIMATED_COSTS = {
   "google/nano-banana-pro/edit": { unit: "image", cost: 0.002 },
   "seedream-v4.5-edit": { unit: "image", cost: 0.04 },
   "kling-2.5-turbo": { unit: "video", cost: 0.50 },
-  "seedance-v1.5-pro": { unit: "video", cost: 0.20 }
+  "seedance-v1.5-pro": { unit: "video", cost: 0.20 },
+  "kling-2.6-motion": { unit: "video", cost: 1.12 } // Avg for 10s
 };
 
 const ANGLE_PROMPTS = [
@@ -217,7 +238,7 @@ const enhancePromptLogic = (userPrompt, modelKey, intensity = 'medium') => {
   }
 
   // Model-specific rules
-  if (modelConfig.type === 'image_to_video') {
+  if (modelConfig.type === 'image_to_video' || modelConfig.type === 'motion_control') {
     if (intensity !== 'light') {
         if (!lower.includes("motion")) enhanced += ", natural fluid motion";
         if (!lower.includes("stable")) enhanced += ", stable identity and consistency";
@@ -226,7 +247,7 @@ const enhancePromptLogic = (userPrompt, modelKey, intensity = 'medium') => {
   } else {
     // Image to Image
     if (!lower.includes("preserve")) enhanced += ". Preserve identity, realism, and scene details.";
-    
+     
     if (intensity === 'medium' || intensity === 'strong') {
         if (!lower.includes("lighting")) enhanced += " Consistent lighting.";
         if (!lower.includes("photorealistic") && !lower.includes("cartoon") && !lower.includes("anime")) {
@@ -313,12 +334,23 @@ const generateLocalInspirePrompt = (lastPrompt, casualness = 0.8) => {
   return { text: promptText, category };
 };
 
-const processImageForApi = (file) => {
+const processFileForApi = (file) => {
   return new Promise((resolve, reject) => {
     if (!(file instanceof Blob)) {
       reject("Invalid file type");
       return;
     }
+
+    // Video processing: simple Base64 conversion
+    if (file.type.startsWith('video/')) {
+        const reader = new FileReader();
+        reader.onload = (event) => resolve(event.target.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+        return;
+    }
+
+    // Image processing: Resize and Convert
     const reader = new FileReader();
     reader.onload = (event) => {
       const img = new Image();
@@ -367,6 +399,7 @@ const apiProxy = {
     };
     if (payload.images) summary.imagesCount = payload.images.length;
     if (payload.image) summary.hasSingleImage = true;
+    if (payload.video) summary.hasVideo = true;
     if (payload.duration) summary.duration = payload.duration;
 
     diagnosticsLogger({
@@ -562,7 +595,7 @@ const EnhancePromptModal = ({ isOpen, onClose, originalPrompt, modelKey, onApply
   const [intensity, setIntensity] = useState('medium');
   const [preview, setPreview] = useState("");
   const modelConfig = MODEL_REGISTRY[modelKey];
-  const isVideo = modelConfig?.type === 'image_to_video';
+  const isVideo = modelConfig?.type === 'image_to_video' || modelConfig?.type === 'motion_control';
 
   useEffect(() => {
     if (!isOpen) return;
@@ -707,8 +740,11 @@ const HistoryTile = React.memo(({ item, isActive, onClick, OutputActions, onDown
       <div className="aspect-square w-full relative bg-black/50">
         {item.type === 'job' ? (
            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              {item.img ? <img src={item.img} className="absolute inset-0 w-full h-full object-cover opacity-20 blur-sm"/> : <div className="absolute inset-0 bg-gray-800 opacity-50"/>}
-              <Loader2 className="animate-spin text-blue-400 z-10" size={24} />
+             {item.img ? <img src={item.img} className="absolute inset-0 w-full h-full object-cover opacity-20 blur-sm"/> : <div className="absolute inset-0 bg-gray-800 opacity-50"/>}
+             <div className="relative z-10 flex flex-col items-center">
+                <Loader2 className="animate-spin text-blue-400 mb-2" size={24} />
+                <span className="text-[9px] text-blue-200 bg-black/50 px-2 py-0.5 rounded-full backdrop-blur font-mono">Processing</span>
+             </div>
            </div>
         ) : item.type === 'failed' ? (
            <div className="w-full h-full flex items-center justify-center bg-red-900/10 text-red-500"><AlertCircle size={24} /></div>
@@ -737,9 +773,9 @@ const HistoryTile = React.memo(({ item, isActive, onClick, OutputActions, onDown
 
              {/* Download Button (Overlay) */}
              <button 
-                onClick={(e) => onDownload(e, item.img, `wavespeed-${item.id}.${item.data.outputType === 'video' ? 'mp4' : 'png'}`)}
-                className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-blue-600 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-20"
-                title="Download"
+               onClick={(e) => onDownload(e, item.img, `wavespeed-${item.id}.${item.data.outputType === 'video' ? 'mp4' : 'png'}`)}
+               className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-blue-600 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-20"
+               title="Download"
              >
                 <Download size={12} />
              </button>
@@ -823,7 +859,7 @@ const CharacterLibraryModal = ({ isOpen, onClose, library, onAddCharacter, onDel
     const fileList = Array.from(files);
     if (fileList.length === 0) return;
 
-    const base64Promises = fileList.map(file => processImageForApi(file));
+    const base64Promises = fileList.map(file => processFileForApi(file));
     const objectUrls = fileList.map(file => URL.createObjectURL(file));
     
     setNewCharImages(prev => [...prev, ...objectUrls]);
@@ -1004,7 +1040,7 @@ const DiagnosticsPanel = ({ logs, isOpen, onClose }) => {
 };
 
 /* --- Reference Group Component --- */
-const ReferenceGroup = ({ group, onDelete, onToggleActive, onFilesAdded, onFileRemove, disabled }) => {
+const ReferenceGroup = ({ group, onDelete, onToggleActive, onFilesAdded, onFileRemove, disabled, acceptTypes = "image/*" }) => {
   const fileInputRef = useRef(null);
 
   const handleDrop = (e) => {
@@ -1045,7 +1081,14 @@ const ReferenceGroup = ({ group, onDelete, onToggleActive, onFilesAdded, onFileR
       >
         {group.inputs.map(input => (
           <div key={input.id} className="relative aspect-square bg-gray-800 rounded overflow-hidden border border-gray-700 group/item">
-            <img src={input.previewUrl} className="w-full h-full object-cover" />
+            {input.file?.type.startsWith('video/') || input.previewUrl.match(/\.(mp4|mov|webm)$/i) ? (
+                <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                    <Film size={20} className="text-gray-500" />
+                </div>
+            ) : (
+                <img src={input.previewUrl} className="w-full h-full object-cover" />
+            )}
+            
             {input.isCharacterRef && <div className="absolute top-0 left-0 bg-blue-600 text-white text-[6px] px-1 rounded-br">CHAR</div>}
             <button 
               onClick={() => onFileRemove(input.id)} 
@@ -1066,13 +1109,82 @@ const ReferenceGroup = ({ group, onDelete, onToggleActive, onFilesAdded, onFileR
         </div>
       </div>
       
-      <input type="file" multiple className="hidden" ref={fileInputRef} accept="image/*" onChange={e => { onFilesAdded(e.target.files); e.target.value = ''; }} />
+      <input type="file" multiple className="hidden" ref={fileInputRef} accept={acceptTypes} onChange={e => { onFilesAdded(e.target.files); e.target.value = ''; }} />
       
       <div className="text-[9px] text-gray-500 flex items-center gap-1">
         <ArrowRightCircle size={10} /> Generates 1 independent result
       </div>
     </div>
   );
+};
+
+/* --- Special Input Component for Motion Control --- */
+const MotionControlInputs = ({ inputs, onAdd, onRemove }) => {
+    const imgInput = inputs.find(i => !i.file?.type.startsWith('video/') && !i.previewUrl.match(/\.(mp4|mov|webm)$/i));
+    const vidInput = inputs.find(i => i.file?.type.startsWith('video/') || i.previewUrl.match(/\.(mp4|mov|webm)$/i));
+    const imgRef = useRef(null);
+    const vidRef = useRef(null);
+
+    return (
+        <div className="space-y-4 mb-4">
+            {/* Image Input */}
+            <div className="space-y-1">
+                <span className="text-xs font-bold text-gray-500 uppercase tracking-wider block">1. Reference Image</span>
+                <div 
+                    onClick={() => !imgInput && imgRef.current?.click()}
+                    className={`relative w-full h-32 border-2 border-dashed rounded-lg flex flex-col items-center justify-center transition-colors ${imgInput ? 'border-blue-500 bg-gray-900' : 'border-gray-700 hover:border-gray-500 hover:bg-gray-800/50 cursor-pointer'}`}
+                >
+                    {imgInput ? (
+                        <>
+                            <img src={imgInput.previewUrl} className="w-full h-full object-contain p-1" />
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); onRemove(imgInput.id); }}
+                                className="absolute top-1 right-1 p-1 bg-black/60 text-white rounded hover:bg-red-600 transition-colors"
+                            >
+                                <X size={12}/>
+                            </button>
+                        </>
+                    ) : (
+                        <div className="text-gray-500 flex flex-col items-center">
+                            <ImageIcon size={24} className="mb-2 opacity-50"/>
+                            <span className="text-xs">Upload Character Image</span>
+                        </div>
+                    )}
+                    <input type="file" accept="image/*" ref={imgRef} className="hidden" onChange={(e) => onAdd(e.target.files)} />
+                </div>
+            </div>
+
+            {/* Video Input */}
+            <div className="space-y-1">
+                <span className="text-xs font-bold text-gray-500 uppercase tracking-wider block">2. Motion Reference Video</span>
+                <div 
+                    onClick={() => !vidInput && vidRef.current?.click()}
+                    className={`relative w-full h-32 border-2 border-dashed rounded-lg flex flex-col items-center justify-center transition-colors ${vidInput ? 'border-purple-500 bg-gray-900' : 'border-gray-700 hover:border-gray-500 hover:bg-gray-800/50 cursor-pointer'}`}
+                >
+                    {vidInput ? (
+                        <>
+                            <div className="flex flex-col items-center text-purple-400">
+                                <Film size={32} className="mb-2"/>
+                                <span className="text-xs truncate max-w-[200px] px-2">{vidInput.file?.name || "Reference Video"}</span>
+                            </div>
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); onRemove(vidInput.id); }}
+                                className="absolute top-1 right-1 p-1 bg-black/60 text-white rounded hover:bg-red-600 transition-colors"
+                            >
+                                <X size={12}/>
+                            </button>
+                        </>
+                    ) : (
+                        <div className="text-gray-500 flex flex-col items-center">
+                            <Video size={24} className="mb-2 opacity-50"/>
+                            <span className="text-xs">Upload Motion Video</span>
+                        </div>
+                    )}
+                    <input type="file" accept="video/*" ref={vidRef} className="hidden" onChange={(e) => onAdd(e.target.files)} />
+                </div>
+            </div>
+        </div>
+    );
 };
 
 /* --- Main Application --- */
@@ -1152,7 +1264,8 @@ export default function WaveSpeedStudio() {
 
   // --- ACTIONS: REF GROUPS ---
   const addReferenceGroup = () => {
-    if (activeModel.type === 'image_to_video') return; 
+    // Disable multi-group for video/motion models
+    if (activeModel.type === 'image_to_video' || activeModel.type === 'motion_control') return; 
     const newGroup = { 
       id: generateId(), 
       name: `Reference ${activeWorkspace.referenceGroups.length + 1}`, 
@@ -1503,27 +1616,41 @@ export default function WaveSpeedStudio() {
       };
 
       const allInputs = ws.referenceGroups.flatMap(g => g.inputs);
-      let processedImages = [];
+      let processedFiles = [];
       
       if (job.inputIds.length > 0) {
-        processedImages = await Promise.all(
+        processedFiles = await Promise.all(
           job.inputIds.map(id => {
             const input = allInputs.find(i => i.id === id);
-            if (!input) throw new Error("Source image lost");
+            if (!input) throw new Error("Source input lost");
             if (input.remoteUrl) return Promise.resolve(input.remoteUrl);
-            return processImageForApi(input.file);
+            return processFileForApi(input.file);
           })
         );
       }
 
-      if (modelConfig.type === 'image_to_video') {
+      if (modelConfig.type === 'motion_control') {
+         // Special handling for Motion Control: identify image vs video input
+         const imgInput = processedFiles.find(f => f.startsWith('data:image') || f.match(/\.(jpeg|jpg|png|webp)$/i) || !f.startsWith('data:video'));
+         const vidInput = processedFiles.find(f => f.startsWith('data:video') || f.match(/\.(mp4|mov|webm)$/i));
+
+         if (!imgInput) throw new Error("Motion Control requires a reference image.");
+         if (!vidInput) throw new Error("Motion Control requires a reference video.");
+
+         payload.image = imgInput;
+         payload.video = vidInput;
+         payload.character_orientation = job.settings.characterOrientation;
+         payload.keep_original_sound = job.settings.keepOriginalSound;
+         if (job.settings.negativePrompt) payload.negative_prompt = job.settings.negativePrompt;
+      }
+      else if (modelConfig.type === 'image_to_video') {
         if (modelConfig.key.includes("kling")) {
-           payload.image = processedImages[0]; 
+           payload.image = processedFiles[0]; 
            payload.duration = job.settings.duration || 5;
            payload.guidance_scale = job.settings.guidanceScale || 0.5;
         } 
         else if (modelConfig.key.includes("seedance")) {
-           payload.image = processedImages[0];
+           payload.image = processedFiles[0];
            payload.aspect_ratio = job.settings.aspectRatio;
            payload.duration = job.settings.duration || 5;
            payload.resolution = job.settings.resolution;
@@ -1531,7 +1658,7 @@ export default function WaveSpeedStudio() {
         }
       } 
       else {
-        payload.images = processedImages;
+        payload.images = processedFiles;
         if (modelConfig.supports.resolutions.length > 0) payload.resolution = job.settings.resolution;
         if (modelConfig.supports.aspectRatios.length > 0) payload.aspect_ratio = job.settings.aspectRatio;
         if (modelConfig.supports.syncMode) payload.enable_sync_mode = job.settings.enableSync;
@@ -1548,7 +1675,7 @@ export default function WaveSpeedStudio() {
       } else if (pollUrl) {
         let polling = true;
         let attempts = 0;
-        const MAX = 60;
+        const MAX = 600; // Increased to prevent timeout (10-20 min)
         while (polling && attempts < MAX) {
           await new Promise(r => setTimeout(r, 2000));
           const pollResult = await apiProxy.poll(pollUrl, addLog);
@@ -1613,15 +1740,17 @@ export default function WaveSpeedStudio() {
     const activeGroups = activeWorkspace.referenceGroups.filter(g => g.active);
     const hasAnyInputs = activeGroups.some(g => g.inputs.length > 0);
     
-    if (activeModel.supports.imagesRequired && !hasAnyInputs) {
-      alert("This model requires at least one active reference image group.");
+    // Check basic requirements
+    if ((activeModel.supports.imagesRequired || activeModel.supports.videosRequired) && !hasAnyInputs) {
+      alert("This model requires active reference inputs.");
       return;
     }
 
     const newJobs = [];
     
     activeGroups.forEach(group => {
-      if (activeModel.supports.imagesRequired && group.inputs.length === 0) return;
+      if ((activeModel.supports.imagesRequired || activeModel.supports.videosRequired) && group.inputs.length === 0) return;
+      
       const groupPreview = group.inputs.length > 0 ? group.inputs[0].previewUrl : null;
       const count = 1; 
 
@@ -1641,7 +1770,7 @@ export default function WaveSpeedStudio() {
       }
     });
 
-    if (newJobs.length === 0 && !activeModel.supports.imagesRequired) {
+    if (newJobs.length === 0 && !activeModel.supports.imagesRequired && !activeModel.supports.videosRequired) {
        newJobs.push({
            id: generateId(),
            inputIds: [],
@@ -1766,9 +1895,9 @@ export default function WaveSpeedStudio() {
                 {/* CONTEXT MENU */}
                 {tabMenuOpenId === ws.id && (
                   <div className="absolute top-full right-0 mt-1 bg-gray-900 border border-gray-700 rounded shadow-xl py-1 z-50 w-32 animate-in fade-in zoom-in-95 duration-100">
-                     <button onClick={(e) => { e.stopPropagation(); setShowDuplicateModal(true); }} className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-800 flex items-center gap-2">
-                       <Copy size={12}/> Duplicate
-                     </button>
+                      <button onClick={(e) => { e.stopPropagation(); setShowDuplicateModal(true); }} className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-800 flex items-center gap-2">
+                        <Copy size={12}/> Duplicate
+                      </button>
                   </div>
                 )}
               </div>
@@ -1809,11 +1938,11 @@ export default function WaveSpeedStudio() {
             {/* Input Grid / Reference Groups */}
             <div className="flex justify-between items-center mb-2">
               <span className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                Reference Groups ({activeWorkspace.referenceGroups.length})
-                {activeModel.type === 'image_to_video' && <HelpCircle size={10} title="Multi-reference variants disabled for video"/>}
+                {activeModel.type === 'motion_control' ? "Inputs" : `Reference Groups (${activeWorkspace.referenceGroups.length})`}
+                {(activeModel.type === 'image_to_video' || activeModel.type === 'motion_control') && <HelpCircle size={10} title="Multi-reference variants disabled for video models"/>}
               </span>
               <div className="flex gap-2">
-                 {characterLibrary.length > 0 && (
+                 {characterLibrary.length > 0 && activeModel.type !== 'motion_control' && (
                    <div className="relative group">
                      <button className="text-[10px] text-blue-400 hover:text-blue-300 font-medium">Use Character</button>
                      <div className="absolute top-full right-0 mt-1 bg-gray-900 border border-gray-700 rounded shadow-xl p-1 hidden group-hover:block w-32 z-50">
@@ -1828,28 +1957,37 @@ export default function WaveSpeedStudio() {
               </div>
             </div>
 
-            <div className="space-y-2 mb-4">
-              {activeWorkspace.referenceGroups.map(group => (
-                <ReferenceGroup 
-                  key={group.id} 
-                  group={group}
-                  disabled={false}
-                  onToggleActive={() => toggleReferenceGroup(group.id)}
-                  onDelete={() => removeReferenceGroup(group.id)}
-                  onFilesAdded={(files) => addFilesToGroup(files, group.id)}
-                  onFileRemove={(fileId) => removeFileFromGroup(group.id, fileId)}
+            {activeModel.type === 'motion_control' ? (
+                <MotionControlInputs 
+                    inputs={activeWorkspace.referenceGroups[0].inputs}
+                    onAdd={(files) => addFilesToGroup(files, activeWorkspace.referenceGroups[0].id)}
+                    onRemove={(fileId) => removeFileFromGroup(activeWorkspace.referenceGroups[0].id, fileId)}
                 />
-              ))}
-              
-              <button 
-                onClick={addReferenceGroup}
-                disabled={activeModel.type === 'image_to_video'}
-                className="w-full py-2 border-2 border-dashed border-gray-700 rounded-lg text-gray-500 hover:text-white hover:border-blue-500 hover:bg-gray-800/50 text-xs font-medium flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                title={activeModel.type === 'image_to_video' ? "Video models do not support multi-reference variant generation yet." : "Add another reference group"}
-              >
-                <Plus size={14} /> Add Reference Group
-              </button>
-            </div>
+            ) : (
+                <div className="space-y-2 mb-4">
+                  {activeWorkspace.referenceGroups.map(group => (
+                    <ReferenceGroup 
+                      key={group.id} 
+                      group={group}
+                      disabled={false}
+                      onToggleActive={() => toggleReferenceGroup(group.id)}
+                      onDelete={() => removeReferenceGroup(group.id)}
+                      onFilesAdded={(files) => addFilesToGroup(files, group.id)}
+                      onFileRemove={(fileId) => removeFileFromGroup(group.id, fileId)}
+                      acceptTypes={activeModel.type === 'motion_control' ? "image/*,video/*" : "image/*"}
+                    />
+                  ))}
+                  
+                  <button 
+                    onClick={addReferenceGroup}
+                    disabled={activeModel.type === 'image_to_video' || activeModel.type === 'motion_control'}
+                    className="w-full py-2 border-2 border-dashed border-gray-700 rounded-lg text-gray-500 hover:text-white hover:border-blue-500 hover:bg-gray-800/50 text-xs font-medium flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Video models do not support multi-reference variant generation yet."
+                  >
+                    <Plus size={14} /> Add Reference Group
+                  </button>
+                </div>
+            )}
 
             <div className="mb-2 flex justify-between items-center">
               <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block">Prompt</label>
@@ -1858,8 +1996,8 @@ export default function WaveSpeedStudio() {
                    onClick={() => setShowEnhanceModal(true)}
                    className={`text-[10px] flex items-center gap-1 px-2 py-0.5 rounded-full transition-colors bg-purple-900/50 text-purple-300 border border-purple-500/50 hover:bg-purple-900/80`}
                  >
-                   {activeModel.type === 'image_to_video' ? <PlayCircle size={10} /> : <Sparkles size={10} />}
-                   {activeModel.type === 'image_to_video' ? "Upscale Video..." : "Enhance..."}
+                   {activeModel.type === 'image_to_video' || activeModel.type === 'motion_control' ? <PlayCircle size={10} /> : <Sparkles size={10} />}
+                   {activeModel.type === 'image_to_video' || activeModel.type === 'motion_control' ? "Upscale Video..." : "Enhance..."}
                  </button>
               </div>
             </div>
@@ -1868,32 +2006,32 @@ export default function WaveSpeedStudio() {
             {/* LIVE PREVIEW OF TRANSFORMATION */}
             {showPreview && (
                <div className="mb-4 p-3 bg-gray-900 border border-gray-700 rounded text-xs space-y-2 animate-in fade-in slide-in-from-top-2">
-                  <div>
-                    <span className="text-gray-500 font-bold block mb-1">ORIGINAL</span>
-                    <p className="text-gray-300">{activeWorkspace.prompt || "(Empty)"}</p>
-                  </div>
-                  {activeWorkspace.settings.enhancePrompt && (
-                    <div>
-                      <div className="flex items-center gap-1 text-purple-400 font-bold mb-1"><Sparkles size={10}/> ENHANCED</div>
-                      <p className="text-purple-200/80 italic">{enhancePromptLogic(activeWorkspace.prompt, activeWorkspace.modelId)}</p>
-                    </div>
-                  )}
-                  {activeWorkspace.settings.upscaleVideo && activeModel.type === 'image_to_video' && (
-                    <div>
-                      <div className="flex items-center gap-1 text-cyan-400 font-bold mb-1"><PlayCircle size={10}/> VIDEO UPSCALED</div>
-                      <p className="text-cyan-200/80 italic">
-                        {upscaleVideoPrompt(
-                          activeWorkspace.settings.enhancePrompt ? enhancePromptLogic(activeWorkspace.prompt, activeWorkspace.modelId) : activeWorkspace.prompt, 
-                          activeWorkspace.settings.upscaleIntensity
-                        )}
-                      </p>
-                    </div>
-                  )}
+                 <div>
+                   <span className="text-gray-500 font-bold block mb-1">ORIGINAL</span>
+                   <p className="text-gray-300">{activeWorkspace.prompt || "(Empty)"}</p>
+                 </div>
+                 {activeWorkspace.settings.enhancePrompt && (
+                   <div>
+                     <div className="flex items-center gap-1 text-purple-400 font-bold mb-1"><Sparkles size={10}/> ENHANCED</div>
+                     <p className="text-purple-200/80 italic">{enhancePromptLogic(activeWorkspace.prompt, activeWorkspace.modelId)}</p>
+                   </div>
+                 )}
+                 {activeWorkspace.settings.upscaleVideo && (activeModel.type === 'image_to_video' || activeModel.type === 'motion_control') && (
+                   <div>
+                     <div className="flex items-center gap-1 text-cyan-400 font-bold mb-1"><PlayCircle size={10}/> VIDEO UPSCALED</div>
+                     <p className="text-cyan-200/80 italic">
+                       {upscaleVideoPrompt(
+                         activeWorkspace.settings.enhancePrompt ? enhancePromptLogic(activeWorkspace.prompt, activeWorkspace.modelId) : activeWorkspace.prompt, 
+                         activeWorkspace.settings.upscaleIntensity
+                       )}
+                     </p>
+                   </div>
+                 )}
                </div>
             )}
 
             {/* VIDEO UPSCALE CONTROLS (Only for Video Models) */}
-            {activeModel.type === 'image_to_video' && (
+            {(activeModel.type === 'image_to_video' || activeModel.type === 'motion_control') && (
               <div className="mb-3 flex items-center justify-between bg-cyan-900/10 p-2 rounded border border-cyan-900/30">
                  <div className="flex items-center gap-2">
                     <button 
@@ -1987,16 +2125,36 @@ export default function WaveSpeedStudio() {
                     <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Duration (Sec)</label>
                     <div className="flex gap-2">
                       {activeModel.supports.durations.map(d => (
-                         <button 
-                           key={d}
-                           onClick={() => updateWorkspace(activeTabId, w => ({ settings: { ...w.settings, duration: d } }))}
-                           className={`flex-1 py-1.5 rounded text-xs border ${activeWorkspace.settings.duration === d ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white'}`}
-                         >
-                           {d}s
-                         </button>
+                          <button 
+                            key={d}
+                            onClick={() => updateWorkspace(activeTabId, w => ({ settings: { ...w.settings, duration: d } }))}
+                            className={`flex-1 py-1.5 rounded text-xs border ${activeWorkspace.settings.duration === d ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white'}`}
+                          >
+                            {d}s
+                          </button>
                       ))}
                     </div>
                  </div>
+              )}
+
+              {/* Motion Control Specifics */}
+              {activeModel.type === 'motion_control' && (
+                 <>
+                   <div className="pt-2 border-t border-gray-800">
+                      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 block">Orientation Control</label>
+                      <div className="flex gap-2">
+                         <button onClick={() => updateWorkspace(activeTabId, w => ({ settings: { ...w.settings, characterOrientation: 'image' } }))} className={`flex-1 py-1.5 rounded text-xs border ${activeWorkspace.settings.characterOrientation === 'image' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>Match Image</button>
+                         <button onClick={() => updateWorkspace(activeTabId, w => ({ settings: { ...w.settings, characterOrientation: 'video' } }))} className={`flex-1 py-1.5 rounded text-xs border ${activeWorkspace.settings.characterOrientation === 'video' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>Match Video</button>
+                      </div>
+                   </div>
+                   
+                   <div className="pt-2 border-t border-gray-800 flex items-center justify-between text-xs text-gray-400">
+                      <span className="flex items-center gap-1"><Music size={12}/> Keep Original Sound</span>
+                      <button onClick={() => updateWorkspace(activeTabId, w => ({ settings: { ...w.settings, keepOriginalSound: !w.settings.keepOriginalSound } }))} className={`w-8 h-4 rounded-full relative transition-colors ${activeWorkspace.settings.keepOriginalSound ? 'bg-green-600' : 'bg-gray-700'}`}>
+                        <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform ${activeWorkspace.settings.keepOriginalSound ? 'translate-x-4' : 'translate-x-0.5'}`}></div>
+                      </button>
+                   </div>
+                 </>
               )}
 
               {/* Output Count */}
@@ -2037,7 +2195,7 @@ export default function WaveSpeedStudio() {
           </div>
           
           <div className="p-4 border-t border-gray-800 bg-gray-900">
-             <Button variant="primary" icon={Play} onClick={enqueueJobs} disabled={activeModel.supports.imagesRequired && !activeWorkspace.referenceGroups.some(g => g.inputs.length > 0)} className="w-full py-3 text-base shadow-blue-500/20">Generate</Button>
+             <Button variant="primary" icon={Play} onClick={enqueueJobs} disabled={(activeModel.supports.imagesRequired || activeModel.supports.videosRequired) && !activeWorkspace.referenceGroups.some(g => g.inputs.length > 0)} className="w-full py-3 text-base shadow-blue-500/20">Generate</Button>
           </div>
         </div>
 
@@ -2070,16 +2228,16 @@ export default function WaveSpeedStudio() {
                   
                   {/* Overlay Controls */}
                   <div className="absolute bottom-4 left-0 right-0 flex justify-center opacity-0 group-hover/viewer:opacity-100 transition-opacity pointer-events-auto" onClick={e => e.stopPropagation()}>
-                     <div className="bg-gray-900/80 backdrop-blur border border-gray-700 rounded-full px-4 py-2 flex gap-4 shadow-xl items-center">
-                        <button onClick={(e) => handleDownload(e, activeWorkspace.activeItem.url, `wavespeed-${activeWorkspace.activeItem.job.id}.${activeWorkspace.activeItem.job.outputType === 'video' ? 'mp4' : 'png'}`)} className="text-gray-300 hover:text-white" title="Download"><Download size={18} /></button>
-                        <button onClick={() => setLightboxItem(activeWorkspace.activeItem)} className="text-gray-300 hover:text-white" title="Maximize"><Maximize2 size={18}/></button>
-                        <div className="w-px h-4 bg-gray-700"></div>
-                        {(!activeWorkspace.activeItem.job.outputType || activeWorkspace.activeItem.job.outputType === 'image') && (
-                          <div className="flex gap-2">
-                             <OutputActions url={activeWorkspace.activeItem.url} className="" />
-                          </div>
-                        )}
-                     </div>
+                      <div className="bg-gray-900/80 backdrop-blur border border-gray-700 rounded-full px-4 py-2 flex gap-4 shadow-xl items-center">
+                         <button onClick={(e) => handleDownload(e, activeWorkspace.activeItem.url, `wavespeed-${activeWorkspace.activeItem.job.id}.${activeWorkspace.activeItem.job.outputType === 'video' ? 'mp4' : 'png'}`)} className="text-gray-300 hover:text-white" title="Download"><Download size={18} /></button>
+                         <button onClick={() => setLightboxItem(activeWorkspace.activeItem)} className="text-gray-300 hover:text-white" title="Maximize"><Maximize2 size={18}/></button>
+                         <div className="w-px h-4 bg-gray-700"></div>
+                         {(!activeWorkspace.activeItem.job.outputType || activeWorkspace.activeItem.job.outputType === 'image') && (
+                           <div className="flex gap-2">
+                              <OutputActions url={activeWorkspace.activeItem.url} className="" />
+                           </div>
+                         )}
+                      </div>
                   </div>
                </div>
             ) : activeWorkspace.activeItem.type === 'job' ? (
