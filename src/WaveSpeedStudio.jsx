@@ -8,7 +8,7 @@ import {
   Video, Film, Clapperboard, Camera, Wand2, MonitorPlay,
   DollarSign, Timer, BarChart3, Sparkles, RotateCcw, History, ArrowRight,
   Lightbulb, Copy, Save, Shuffle, Sliders, PlayCircle, Users, UserPlus, Check, AlertTriangle, ArrowRightCircle,
-  HelpCircle, Eye, EyeOff, MoreHorizontal, FileDigit, Music
+  HelpCircle, Eye, EyeOff, MoreHorizontal, FileDigit, Music, CornerUpLeft
 } from 'lucide-react';
 
 /**
@@ -1675,7 +1675,7 @@ export default function WaveSpeedStudio() {
       } else if (pollUrl) {
         let polling = true;
         let attempts = 0;
-        const MAX = 600; // Increased to prevent timeout (10-20 min)
+        const MAX = 1200; // Increased to 40 mins to prevent timeout
         while (polling && attempts < MAX) {
           await new Promise(r => setTimeout(r, 2000));
           const pollResult = await apiProxy.poll(pollUrl, addLog);
@@ -1784,7 +1784,13 @@ export default function WaveSpeedStudio() {
        });
     }
 
-    updateWorkspace(activeTabId, w => ({ queue: [...w.queue, ...newJobs] }));
+    // Immediately show loading screen for the first job
+    const firstJob = newJobs[0];
+    updateWorkspace(activeTabId, w => ({ 
+      queue: [...w.queue, ...newJobs],
+      activeItem: firstJob ? { type: 'job', data: firstJob, img: firstJob.inputPreview } : w.activeItem 
+    }));
+    
     showToast(`Queued ${newJobs.length} job(s)`);
   };
 
@@ -2217,6 +2223,29 @@ export default function WaveSpeedStudio() {
                   className="relative w-full h-full flex items-center justify-center animate-in fade-in duration-300 cursor-zoom-in"
                   onClick={() => setLightboxItem(activeWorkspace.activeItem)}
                >
+                  {/* Prompt Overlay */}
+                  <div className="absolute top-4 left-4 right-4 z-20 opacity-0 group-hover/viewer:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+                      <div className="bg-gray-900/90 backdrop-blur border border-gray-700 rounded-lg p-3 shadow-xl max-w-2xl mx-auto">
+                          <div className="flex justify-between items-start gap-4">
+                              <div>
+                                  <span className="text-[10px] uppercase font-bold text-gray-500 block mb-1">Prompt Used</span>
+                                  <p className="text-xs text-gray-300 line-clamp-3">{activeWorkspace.activeItem.job.prompt}</p>
+                              </div>
+                              <button 
+                                  onClick={(e) => { 
+                                      e.stopPropagation(); 
+                                      updateWorkspace(activeTabId, w => ({ prompt: activeWorkspace.activeItem.job.prompt }));
+                                      showToast("Prompt restored to input");
+                                  }}
+                                  className="p-1.5 bg-gray-800 hover:bg-blue-600 text-gray-400 hover:text-white rounded transition-colors shrink-0 flex items-center gap-1"
+                                  title="Use this prompt"
+                              >
+                                  <CornerUpLeft size={14} /> <span className="text-[10px] font-bold">USE</span>
+                              </button>
+                          </div>
+                      </div>
+                  </div>
+
                   {/* Smart Render: Video vs Image */}
                   {activeWorkspace.activeItem.job.outputType === 'video' || activeWorkspace.activeItem.url.match(/\.(mp4|webm|mov)/i) ? (
                     <div className="relative max-w-full max-h-full aspect-video shadow-2xl rounded-sm overflow-hidden bg-black pointer-events-none">
@@ -2263,7 +2292,10 @@ export default function WaveSpeedStudio() {
                  isActive={activeWorkspace.activeItem?.url === item.img}
                  onClick={() => {
                     const itemData = item.type === 'output' ? { type: 'output', url: item.img, job: item.data } : item.type === 'failed' ? { type: 'failed', error: item.error, data: item.data } : { type: 'job', data: item.data };
-                    updateWorkspace(activeTabId, w => ({ activeItem: itemData }));
+                    updateWorkspace(activeTabId, w => ({ 
+                      activeItem: itemData,
+                      prompt: item.data.prompt // Auto-restore prompt
+                    }));
                  }}
                  OutputActions={OutputActions}
                  onDownload={handleDownload}
